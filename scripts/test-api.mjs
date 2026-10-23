@@ -1,6 +1,11 @@
-// Pruebas de la API con base en memoria: `npm test`
-process.env.B333_MEMORY = '1';
-delete process.env.UPSTASH_REDIS_REST_URL; delete process.env.KV_REST_API_URL;
+// Pruebas de la API: `npm test`
+// Corre contra un servidor que imita a Upstash (mismo formato que la base real) usando la librería oficial.
+import { crearUpstashFalso } from './fake-upstash.mjs';
+const up = crearUpstashFalso();
+await new Promise((r) => up.listen(0, r));
+delete process.env.B333_MEMORY; delete process.env.KV_REST_API_URL; delete process.env.KV_REST_API_TOKEN;
+process.env.UPSTASH_REDIS_REST_URL = `http://127.0.0.1:${up.address().port}`;
+process.env.UPSTASH_REDIS_REST_TOKEN = 'token-prueba';
 process.env.PANEL_USUARIO = 'dueno'; process.env.PANEL_PASSWORD = 'Clave-Segura-1';
 process.env.PANEL_USUARIOS = 'franco:otraclave';
 process.env.SESSION_SECRET = 'secreto-de-prueba-para-tests-123';
@@ -8,6 +13,22 @@ delete process.env.VAPID_PUBLIC_KEY; delete process.env.VAPID_PRIVATE_KEY;
 
 const { crearServidor } = await import('./dev-server.mjs');
 const { ahora, addDays, weekday } = await import('../api/_lib/agenda.js');
+const store = await import('../api/_lib/store.js');
+
+// Datos dañados como los que dejó la versión anterior en Upstash
+await store.setConfig({ direccion: 'Lavalle 487' });
+await store.setDoc('barberos', 'franco', { nombre: 'Franco Borelli', apodo: 'Franco', dias: [2, 3, 4, 5, 6], activo: true, orden: 1 });
+await store.setDoc('barberos', 'gonza', { nombre: 'Gonzalo Veron', apodo: 'Gonza', dias: [2, 3, 4, 5, 6], activo: true, orden: 2 });
+await store.setDoc('barberos', '1', { nombre: 'Franco Borelli (copia)', dias: [2], activo: true });
+await store.setDoc('servicios', 'corte-franco', { nombre: 'Corte de cabello', duracion: 30, precio: 18000, barberos: ['franco'], activo: true, orden: 1, promo: { activo: true, dia: 2, precio: 16000, nota: 'Pagando únicamente en efectivo' } });
+await store.setDoc('servicios', 'corte-gonza', { nombre: 'Corte de cabello', duracion: 30, precio: 16000, barberos: ['gonza'], activo: true, orden: 2, promo: { activo: true, dia: 2, precio: 14000, nota: 'Pagando únicamente en efectivo' } });
+await store.setDoc('servicios', 'barba-franco', { nombre: 'Corte + barba', duracion: 60, precio: 26000, barberos: ['franco'], activo: true, orden: 5 });
+await store.setDoc('servicios', 'barba-gonza', { nombre: 'Corte + barba', duracion: 60, precio: 24000, barberos: ['gonza'], activo: true, orden: 6 });
+await store.setDoc('servicios', 'cejas-franco', { nombre: 'Corte + cejas', duracion: 30, precio: 21000, barberos: ['franco'], activo: true, orden: 3 });
+await store.setDoc('servicios', 'perfilado', { nombre: 'Perfilado de barba', duracion: 30, precio: 8000, barberos: [], activo: true, orden: 9 });
+await store.setDoc('servicios', '3', { nombre: 'Corte de cabello', duracion: 30, precio: 1, barberos: ['1'], activo: true });
+await store.setDoc('turnos', 'abc123', { barberoId: '1', servicioId: '3', fecha: '2030-01-01', hora: '10:00', dur: 30, cliente: 'Prueba', estado: 'confirmado' });
+await store.setDoc('ocupados', '1_2030-01-01', { barberoId: '1', fecha: '2030-01-01', bloques: [{ id: 'abc123', hora: '10:00', dur: 30 }] });
 
 const srv = crearServidor();
 await new Promise((r) => srv.listen(0, r));
@@ -26,9 +47,23 @@ const hoy = ahora().fecha;
 const proxDia = (wd, desde = 1) => { for (let i = desde; i < 14; i++) { const f = addDays(hoy, i); if (weekday(f) === wd) return f; } };
 const mie = proxDia(3), mar = proxDia(2), lun = proxDia(1);
 
-console.log('Web pública');
+console.log('Reparación de los datos dañados');
 let r = await call('/api/public');
-check('carga datos iniciales', r.status === 200 && Object.keys(r.j.barberos).length === 2 && Object.keys(r.j.servicios).length === 9, r.j);
+check('lee los barberos con su nombre de identificador', Object.keys(r.j.barberos).sort().join() === 'franco,gonza', Object.keys(r.j.barberos));
+check('borra la copia numerada del barbero', !r.j.barberos['1']);
+check('borra el servicio numerado', !r.j.servicios['3'] && !!r.j.servicios['corte-franco'], Object.keys(r.j.servicios));
+check('borra el horario ocupado por el barbero numerado', !Object.keys(r.j.ocupados).some((k) => k.startsWith('1_')));
+check('cada servicio queda con su barbero', r.j.servicios['corte-franco'].barberos[0] === 'franco' && r.j.servicios['corte-gonza'].barberos[0] === 'gonza');
+// se completan los servicios que faltaban para el resto de las pruebas
+await store.setDoc('servicios', 'cejas-gonza', { nombre: 'Corte + cejas', duracion: 30, precio: 19000, barberos: ['gonza'], activo: true, orden: 4 });
+await store.setDoc('servicios', 'completo-franco', { nombre: 'Servicio completo', duracion: 60, precio: 29000, barberos: ['franco'], activo: true, orden: 7 });
+await store.setDoc('servicios', 'completo-gonza', { nombre: 'Servicio completo', duracion: 60, precio: 27000, barberos: ['gonza'], activo: true, orden: 8 });
+const cfg0 = (await call('/api/public')).j.config;
+await store.setConfig({ ...cfg0, horarios: { 0:{a:false,d:'10:00',h:'21:00'},1:{a:false,d:'10:00',h:'21:00'},2:{a:true,d:'10:00',h:'21:00'},3:{a:true,d:'10:00',h:'21:00'},4:{a:true,d:'10:00',h:'21:00'},5:{a:true,d:'10:00',h:'21:00'},6:{a:true,d:'10:00',h:'21:00'} } });
+
+console.log('Web pública');
+r = await call('/api/public');
+check('carga datos', r.status === 200 && Object.keys(r.j.barberos).length === 2 && Object.keys(r.j.servicios).length === 9, Object.keys(r.j.servicios));
 check('horario 10 a 21 de martes a sábado', r.j.config.horarios[3].h === '21:00' && r.j.config.horarios[1].a === false);
 
 console.log('Reservas');
@@ -66,6 +101,17 @@ r = await call('/api/auth?op=session');
 check('la sesión queda abierta', r.j.user === 'dueno', r.j);
 r = await call('/api/admin?op=data');
 check('el panel ve los turnos con datos del cliente', r.status === 200 && r.j.turnos[t1].cliente === 'Juan Pérez');
+
+console.log('Editar barberos y servicios');
+let dd = (await call('/api/admin?op=data')).j;
+r = await call('/api/admin?op=save', { col: 'barberos', id: 'franco', data: { ...dd.barberos.franco, especialidad: 'Fades' } });
+r = await call('/api/admin?op=save', { col: 'barberos', id: 'franco', data: { ...dd.barberos.franco, especialidad: 'Fades y diseños' } });
+dd = (await call('/api/admin?op=data')).j;
+check('editar un barbero dos veces no lo duplica', Object.keys(dd.barberos).length === 2 && dd.barberos.franco.especialidad === 'Fades y diseños', Object.keys(dd.barberos));
+r = await call('/api/admin?op=save', { col: 'servicios', id: 'corte-gonza', data: { ...dd.servicios['corte-gonza'], precio: 17000 } });
+r = await call('/api/public');
+check('editar un servicio cambia el precio y no lo duplica', r.j.servicios['corte-gonza'].precio === 17000 && Object.keys(r.j.servicios).length === 9, Object.keys(r.j.servicios).length);
+await call('/api/admin?op=save', { col: 'servicios', id: 'corte-gonza', data: { ...dd.servicios['corte-gonza'], precio: 16000 } });
 
 console.log('Panel');
 r = await call('/api/admin?op=turno', { id: t1, data: { ...((await call('/api/admin?op=data')).j.turnos[t1]), estado: 'cancelado' } });

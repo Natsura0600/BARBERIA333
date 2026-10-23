@@ -26,9 +26,10 @@ function memoria() {
     async incr(k) { const v = (vivo(k) ? +m.get(k) : 0) + 1; m.set(k, v); return v; },
     async pexpire(k, ms) { if (vivo(k)) vence.set(k, Date.now() + ms); return 1; },
     async hget(k, f) { return vivo(k) ? (m.get(k)[f] ?? null) : null; },
-    async hset(k, obj) { const h = vivo(k) ? m.get(k) : {}; Object.assign(h, obj); m.set(k, h); return 1; },
+    async hset(k, obj) { const h = vivo(k) ? m.get(k) : {}; let n = 0; for (const [f, v] of Object.entries(obj)) { if (!(f in h)) n++; h[f] = String(v); } m.set(k, h); return n; },
     async hdel(k, ...f) { if (!vivo(k)) return 0; const h = m.get(k); f.forEach((x) => delete h[x]); return 1; },
-    async hgetall(k) { return vivo(k) ? { ...m.get(k) } : null; },
+    // igual que Upstash sin deserializar: lista plana [campo, valor, campo, valor, ...]
+    async hgetall(k) { if (!vivo(k)) return []; const out = []; for (const [f, v] of Object.entries(m.get(k))) out.push(f, v); return out; },
   };
 }
 
@@ -50,12 +51,20 @@ const parse = (v) => {
   try { return JSON.parse(v); } catch { return null; }
 };
 
+// Upstash (sin deserializar) devuelve HGETALL como lista plana: [campo, valor, campo, valor...].
+// Se acepta también el formato objeto por si cambia la librería.
+function pares(h) {
+  if (!h) return [];
+  if (Array.isArray(h)) { const out = []; for (let i = 0; i + 1 < h.length; i += 2) out.push([String(h[i]), h[i + 1]]); return out; }
+  if (typeof h === 'object') return Object.entries(h);
+  return [];
+}
 export async function all(col) {
-  const h = (await kv().hgetall(P + col)) || {};
   const out = {};
-  for (const [k, v] of Object.entries(h)) { const d = parse(v); if (d) out[k] = d; }
+  for (const [k, v] of pares(await kv().hgetall(P + col))) { const d = parse(v); if (d && typeof d === 'object') out[k] = d; }
   return out;
 }
+export async function campos(col) { return pares(await kv().hgetall(P + col)).map(([k]) => k); }
 export async function getDoc(col, id) { return parse(await kv().hget(P + col, id)); }
 // Cada cambio sube un número de versión: así la web pregunta "¿cambió algo?" con 1 solo comando.
 async function cambio() { await kv().incr(P + 'ver'); }

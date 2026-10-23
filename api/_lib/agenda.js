@@ -1,6 +1,6 @@
 // Reglas de la agenda: horarios, cortes, disponibilidad y precios.
 // Es la misma lógica que usa la web, pero acá es la que manda.
-import { getConfig, setConfig, all, setDoc, withLock } from './store.js';
+import { getConfig, setConfig, all, setDoc, delDoc, withLock, kv, campos } from './store.js';
 
 export const TZ = process.env.ZONA_HORARIA || 'America/Argentina/Buenos_Aires';
 export const DOW = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
@@ -92,6 +92,27 @@ function semilla() {
   };
 }
 
+// Reparación de una sola vez: la primera versión leía mal la base de Upstash y, al editar,
+// creaba barberos y servicios con números como identificador (1, 3, 5...).
+// Esos registros nunca se generan bien, así que se borran junto con los turnos que los usan.
+const P = process.env.DB_PREFIX || 'b333:';
+let reparado = false;
+async function repararUnaVez() {
+  if (reparado) return;
+  if (await kv().get(P + 'fix:ids')) { reparado = true; return; }
+  await withLock('reparar', async () => {
+    if (await kv().get(P + 'fix:ids')) return;
+    const num = (x) => /^\d+$/.test(String(x));
+    for (const col of ['barberos', 'servicios']) for (const id of await campos(col)) if (num(id)) await delDoc(col, id);
+    const tur = await all('turnos');
+    for (const [id, t] of Object.entries(tur)) if (num(id) || num(t.barberoId) || num(t.servicioId)) await delDoc('turnos', id);
+    for (const id of await campos('ocupados')) if (num(id) || num(String(id).split('_')[0])) await delDoc('ocupados', id);
+    for (const id of await campos('push')) if (num(id)) await delDoc('push', id);
+    await kv().set(P + 'fix:ids', '1');
+  });
+  reparado = true;
+}
+
 // Config + barberos + servicios. Si la base está vacía, la inicializa.
 export async function cargarBase() {
   let config = await getConfig();
@@ -105,6 +126,7 @@ export async function cargarBase() {
     });
     config = await getConfig();
   }
+  await repararUnaVez();
   const [barberos, servicios] = await Promise.all([all('barberos'), all('servicios')]);
   return { config, barberos, servicios };
 }
