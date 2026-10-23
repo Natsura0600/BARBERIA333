@@ -47,8 +47,8 @@ const check = (n, c, x) => { if (c) { ok++; console.log('  ✓', n); } else { ma
 
 await sleep(900);
 console.log('Web pública');
-check('5 servicios en la lista de precios', $$('#priceList tbody tr').length === 5, $$('#priceList tbody tr').length);
-check('columnas Franco y Gonza', /Franco/.test($('#priceList thead').textContent) && /Gonza/.test($('#priceList thead').textContent));
+check('5 servicios en la lista de precios', $$('#priceList .menu-row').length === 5, $$('#priceList .menu-row').length);
+check('columnas Franco y Gonza', /Franco/.test($('#priceList .menu-head').textContent) && /Gonza/.test($('#priceList .menu-head').textContent));
 check('aparecen los 10 precios', precios().length === 10 && precios().every((p) => /^\$\d/.test(p)), precios());
 check('precios correctos', precios().join(' ') === '$18.000 $16.000 $21.000 $19.000 $26.000 $24.000 $29.000 $27.000 $8.000 $8.000', precios().join(' '));
 check('recordatorio del martes', /martes/i.test($('#notice').textContent));
@@ -58,7 +58,8 @@ console.log('Reserva');
 await click('[data-act="pick-grp"][data-id="corte de cabello"]');
 check('corte de cabello: Franco $18.000 y Gonza $16.000', $$('[data-act="pick-bar"]').map((x) => x.dataset.id).join() === 'franco,gonza' && /\$18\.000/.test($('#booking').textContent) && /\$16\.000/.test($('#booking').textContent));
 await click('[data-act="pick-bar"][data-id="franco"]');
-const mar = $$('.date:not([disabled])').find((x) => /MAR/.test(x.textContent));
+const esMar = (x) => x.querySelector('.d').textContent === 'Mar';
+const mar = $$('.date:not([disabled])').find(esMar);
 await click(mar);
 check('martes $16.000 en efectivo', /\$16\.000/.test($('#booking').textContent) && /efectivo/i.test($('#booking').textContent));
 const hora = $('[data-act="pick-hora"]').dataset.h;
@@ -69,7 +70,7 @@ check('turno confirmado', /Turno confirmado/.test($('#booking').textContent) && 
 await click('[data-act="book-again"]');
 await click('[data-act="pick-grp"][data-id="corte de cabello"]');
 await click('[data-act="pick-bar"][data-id="franco"]');
-await click($$('.date:not([disabled])').find((x) => /MAR/.test(x.textContent)));
+await click($$('.date:not([disabled])').find(esMar));
 check('ese horario ya no se ofrece', !$$('[data-act="pick-hora"]').some((x) => x.dataset.h === hora));
 
 console.log('Ingreso');
@@ -82,6 +83,24 @@ await enviar('#mLogin');
 check('entra al panel', !$('#panel').hidden);
 set('#agDate', mar.dataset.f); await sleep(150);
 check('el turno está en la agenda', /Lucas Prueba/.test($('#panel').textContent));
+
+console.log('Ficha del turno');
+const item = $$('[data-act="info-turno"]').find((x) => /Lucas Prueba/.test(x.textContent));
+await click(item);
+check('se abre la ficha con los datos', /Lucas Prueba/.test($('#modal').textContent) && /11 5555 1234/.test($('#modal').textContent) && /Marcar atendido/.test($('#modal').textContent));
+await click('#modal [data-act="set-estado"][data-e="completado"]', 900);
+check('marcar atendido', $('#modal').hidden && /Atendido/.test($$('[data-act="info-turno"]').find((x) => /Lucas Prueba/.test(x.textContent)).textContent));
+await click($$('[data-act="info-turno"]').find((x) => /Lucas Prueba/.test(x.textContent)));
+await click('#modal [data-act="set-estado"][data-e="confirmado"]', 900);
+await click($$('[data-act="info-turno"]').find((x) => /Lucas Prueba/.test(x.textContent)));
+const cancelar = $('#modal [data-act="confirm"]');
+await click(cancelar, 100);
+check('cancelar pide confirmación', !$('#modal').hidden && /Seguro/.test(cancelar.textContent));
+await click(cancelar, 900);
+check('cancelar turno', $('#modal').hidden && /Cancelado/.test($$('[data-act="info-turno"]').find((x) => /Lucas Prueba/.test(x.textContent)).textContent));
+await click($$('[data-act="info-turno"]').find((x) => /Lucas Prueba/.test(x.textContent)));
+await click('#modal [data-act="set-estado"][data-e="confirmado"]', 900);
+check('reactivar turno', /Confirmado/.test($$('[data-act="info-turno"]').find((x) => /Lucas Prueba/.test(x.textContent)).textContent));
 
 console.log('Editar barberos');
 await click('[data-act="tab"][data-tab="barberos"]');
@@ -102,6 +121,11 @@ await click('[data-act="edit-barbero"]');
 set('#mrNombre', 'Juan Pérez'); set('#mrApodo', 'Juan');
 await enviar('#mBar');
 check('sumar un barbero nuevo', $$('#panel .li').length === 3 && /Juan Pérez/.test($('#panel').textContent));
+const sw = $('[data-act="toggle"][data-col="barberos"][data-id="gonza"]');
+await click(sw, 900);
+check('desactivar con el interruptor', $('[data-act="toggle"][data-col="barberos"][data-id="gonza"]').getAttribute('aria-checked') === 'false');
+await click('[data-act="toggle"][data-col="barberos"][data-id="gonza"]', 900);
+check('volver a activar', $('[data-act="toggle"][data-col="barberos"][data-id="gonza"]').getAttribute('aria-checked') === 'true');
 
 console.log('Editar servicios');
 await click('[data-act="tab"][data-tab="servicios"]');
@@ -127,9 +151,9 @@ check('corte del jueves guardado', $('#hC4').checked && $('#hCD4').value === '14
 
 console.log('La web después de los cambios');
 await click('[data-act="go-public"]'); await sleep(200);
-check('sigue habiendo 5 servicios', $$('#priceList tbody tr').length === 5);
-check('3 barberos', $$('#priceList thead th.bc').length === 3 && $$('#teamList .barber').length === 3);
-const fila = $$('#priceList tbody tr').find((r) => /Corte de cabello/.test(r.textContent));
+check('sigue habiendo 5 servicios', $$('#priceList .menu-row').length === 5);
+check('3 barberos', $$('#priceList .menu-head .bc').length === 3 && $$('#teamList .barber').length === 3);
+const fila = $$('#priceList .menu-row').find((r) => /Corte de cabello/.test(r.textContent));
 check('corte de cabello: Franco $18.000, Gonza $17.000, Juan $15.000', /\$18\.000.*\$17\.000.*\$15\.000/s.test(fila.textContent), fila.textContent);
 check('jueves con corte en los horarios', /10:00 – 14:00 y 16:00 – 21:00/.test($('#hoursTbl').textContent), $('#hoursTbl').textContent);
 const gonza = $$('#teamList .barber').find((b) => /Gonzalo/.test(b.textContent));
